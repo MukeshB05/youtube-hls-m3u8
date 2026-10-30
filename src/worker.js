@@ -35,14 +35,12 @@ async function fetchStreamWithClient(videoId, clientConfig) {
 async function getLiveStream(url) {
   let videoId = null;
 
-  // 1. Resolve the live video ID
+  // 1. Resolve the live video ID from the channel/@handle URL
   if (url.includes('watch?v=')) {
     videoId = url.split('watch?v=')[1].split('&')[0];
   } else {
-    // For channel/@handle URLs, fetch the page to find the current live video ID
     const response = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
     const text = await response.text();
-    // Look for videoId associated with isLive:true, or fall back to the first videoId
     const match = text.match(/"videoId":"([^"]+)"(?:.*?"isLive":true)/) || text.match(/"videoId":"([^"]+)"/);
     if (match) videoId = match[1];
   }
@@ -51,37 +49,40 @@ async function getLiveStream(url) {
     throw Error(`Could not find a live video ID for: ${url}`);
   }
 
-  // 2. Define fallback clients (order matters: most reliable first)
+  // 2. Define working clients (MWEB and ANDROID are currently verified)
   const clients = [
-    { // TV Embedded Client (often returns HLS without PO Token)
-      name: 'TV_EMBEDDED',
-      userAgent: 'Mozilla/5.0 (PlayStation; PlayStation 4/12.00) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15',
+    { // MWEB (iPad Safari) - Bypasses embed restrictions, no PO token needed
+      name: 'MWEB',
+      userAgent: 'Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
       context: {
-        clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
-        clientVersion: '2.0',
+        clientName: 'MWEB',
+        clientVersion: '2.20240724.01.00',
         hl: 'en',
         gl: 'US',
       }
     },
-    { // Web Embedded Player
-      name: 'WEB_EMBEDDED_PLAYER',
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      context: {
-        clientName: 'WEB_EMBEDDED_PLAYER',
-        clientVersion: '1.20240101.00.00',
-        hl: 'en',
-        gl: 'US',
-      }
-    },
-    { // Android Client
+    { // ANDROID - Specific version verified by streamlink to return HLS
       name: 'ANDROID',
-      userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip',
+      userAgent: 'com.google.android.youtube/19.45.36 (Linux; U; Android 11) gzip',
       context: {
         clientName: 'ANDROID',
-        clientVersion: '19.09.37',
+        clientVersion: '19.45.36',
         androidSdkVersion: 30,
         osName: 'Android',
         osVersion: '11',
+        hl: 'en',
+        gl: 'US',
+      }
+    },
+    { // ANDROID_VR - CDN-exempt from certain token requirements
+      name: 'ANDROID_VR',
+      userAgent: 'com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12; GLOBAL) gzip',
+      context: {
+        clientName: 'ANDROID_VR',
+        clientVersion: '1.62.27',
+        androidSdkVersion: 32,
+        osName: 'Android',
+        osVersion: '12',
         hl: 'en',
         gl: 'US',
       }
@@ -96,7 +97,7 @@ async function getLiveStream(url) {
         return streamUrl;
       }
     } catch (e) {
-      // Silently continue to the next client
+      // Continue to next client silently
     }
   }
 
