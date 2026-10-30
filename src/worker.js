@@ -8,66 +8,114 @@ addEventListener('fetch', (event) => {
 })
 
 async function getLiveStream(url) {
-  // Use an iOS User-Agent, which is more reliable for extracting HLS manifests
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+  // 1. Extract the Video ID or Channel Handle from the URL
+  let videoId = null;
+  let channelHandle = null;
+
+  if (url.includes('watch?v=')) {
+    videoId = url.split('watch?v=')[1].split('&')[0];
+  } else if (url.includes('/channel/')) {
+    // For channel IDs, we first need to fetch the channel page to find the live video ID
+    // This is a simplified approach; for handles (@abcnews), we use the live URL directly
+    const response = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const text = await response.text();
+    const match = text.match(/"videoId":"([^"]+)"(?:.*?"isLive":true)/);
+    if (match) videoId = match[1];
+  } else if (url.includes('/@')) {
+    channelHandle = url.split('/@')[1].split('/')[0];
+    // Fetch the handle's live page to find the video ID
+    const liveUrl = `https://www.youtube.com/@${channelHandle}/live`;
+    const response = await fetch(liveUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const text = await response.text();
+    // Look for the live video ID in the page source
+    const match = text.match(/"videoId":"([^"]+)"(?:.*?"isLive":true)/);
+    if (match) {
+      videoId = match[1];
+    } else {
+      // Fallback: try to find any video ID if the specific live regex fails
+       const fallbackMatch = text.match(/"videoId":"([^"]+)"/);
+       if (fallbackMatch) videoId = fallbackMatch[1];
+    }
   }
 
-  let response = await fetch(url, { headers })
-  if (!response.ok) {
-    // Fallback to a standard request if the iOS request fails
-    response = await fetch(url)
+  if (!videoId) {
+    throw Error(`Could not find a live video ID for the requested URL: ${url}`);
   }
+
+  // 2. Use the InnerTube API with the iOS client to get the HLS manifest
+  const apiUrl = 'https://www.youtube.com/youtubei/v1/player';
+  const payload = {
+    context: {
+      client: {
+        clientName: 'IOS',
+        clientVersion: '20.10.4',
+        deviceMake: 'Apple',
+        deviceModel: 'iPhone16,2',
+        osName: 'iPhone',
+        osVersion: '18.3.2.22D82',
+        hl: 'en',
+        gl: 'US'
+      }
+    },
+    videoId: videoId,
+    contentCheckOk: true,
+    racyCheckOk: true
+  };
+
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
+      'Origin': 'https://www.youtube.com',
+      'Referer': 'https://www.youtube.com/'
+    },
+    body: JSON.stringify(payload)
+  });
 
   if (response.ok) {
-    const text = await response.text()
-    // More robust regex to catch variations in the HTML structure
-    const stream = text.match(/"hlsManifestUrl":"([^"]+)"/) || text.match(/(?<=hlsManifestUrl":").*\.m3u8/g)
-    
-    if (stream) {
-      // If the match returns an array, take the first element
-      const finalUrl = Array.isArray(stream) ? stream[0] : stream[1]
-      return finalUrl
+    const data = await response.json();
+    const hlsUrl = data.streamingData?.hlsManifestUrl;
+    if (hlsUrl) {
+      return hlsUrl;
     }
-    // Throw a specific error if the URL is not found, preventing the 'null' crash
-    throw Error(`YouTube stream extraction failed: hlsManifestUrl not found for ${url}`)
+    throw Error(`InnerTube API did not return an hlsManifestUrl. The stream might not be live or available via this client.`);
   } else {
-    throw Error(`YouTube URL (${url}) failed with status: ${response.status}`)
+    throw Error(`InnerTube API request failed with status: ${response.status}`);
   }
 }
 
 async function handleRequest(request) {
-  const { pathname } = new URL(request.url)
+  const { pathname } = new URL(request.url);
 
   if (pathname.startsWith('/@')) {
-    const channel = pathname.split('@')?.[1]?.split('.')?.[0]
+    const channel = pathname.split('@')[1]?.split('.')[0];
     if (channel) {
-      const url = `https://www.youtube.com/@${channel}/live`
-      const stream = await getLiveStream(url)
-      return Response.redirect(stream, 302)
+      const url = `https://www.youtube.com/@${channel}/live`;
+      const stream = await getLiveStream(url);
+      return Response.redirect(stream, 302);
     } else {
-      throw Error(`Channel ID not found: ${pathname}`)
+      throw Error(`Channel handle not found: ${pathname}`);
     }
   } else if (pathname.startsWith('/channel/')) {
-    const channel = pathname.split('/')?.[2]?.split('.')?.[0]
+    const channel = pathname.split('/')[2]?.split('.')[0];
     if (channel) {
-      const url = `https://www.youtube.com/channel/${channel}/live`
-      const stream = await getLiveStream(url)
-      return Response.redirect(stream, 302)
+      const url = `https://www.youtube.com/channel/${channel}/live`;
+      const stream = await getLiveStream(url);
+      return Response.redirect(stream, 302);
     } else {
-      throw Error(`Channel ID not found: ${pathname}`)
+      throw Error(`Channel ID not found: ${pathname}`);
     }
   } else if (pathname.startsWith('/video/')) {
-    const video = pathname.split('/')?.[2]?.split('.')?.[0]
+    const video = pathname.split('/')[2]?.split('.')[0];
     if (video) {
-      const url = `https://www.youtube.com/watch?v=${video}`
-      const stream = await getLiveStream(url)
-      return Response.redirect(stream, 302)
+      const url = `https://www.youtube.com/watch?v=${video}`;
+      const stream = await getLiveStream(url);
+      return Response.redirect(stream, 302);
     } else {
-      throw Error(`Video ID not found: ${pathname}`)
+      throw Error(`Video ID not found: ${pathname}`);
     }
   } else {
-    throw Error(`Path not found: ${pathname}`)
+    throw Error(`Path not found: ${pathname}`);
   }
 }
