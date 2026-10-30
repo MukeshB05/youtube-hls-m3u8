@@ -1,26 +1,16 @@
 {
   "name": "youtube-hls-m3u8",
   "version": "1.0.0",
-  "description": "",
+  "description": "YouTube Live HLS Extractor and Proxy for Cloudflare Workers",
   "main": "src/worker.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "publish": "wrangler publish",
+    "deploy": "wrangler deploy",
+    "deploy:proxy": "wrangler deploy --config wrangler.proxy.toml",
     "dev": "wrangler dev",
     "lint": "standard --fix"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/MukeshB05/youtube-hls-m3u8.git"
-  },
-  "author": "",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/MukeshB05/youtube-hls-m3u8/issues"
-  },
-  "homepage": "https://github.com/MukeshB05/youtube-hls-m3u8#readme",
   "devDependencies": {
     "standard": "^17.0.0",
-    "wrangler": "^4.0.0"
+    "wrangler": "^3.0.0"
   }
 }
