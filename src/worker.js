@@ -7,34 +7,54 @@ addEventListener('fetch', (event) => {
   )
 })
 
-async function getLiveStream(url) {
-  // 1. Extract the Video ID or Channel Handle from the URL
-  let videoId = null;
-  let channelHandle = null;
+// A helper function to try fetching the stream with a specific InnerTube client
+async function fetchStreamWithClient(videoId, clientConfig) {
+  const apiUrl = 'https://www.youtube.com/youtubei/v1/player';
+  const payload = {
+    context: {
+      client: clientConfig.context
+    },
+    videoId: videoId,
+    contentCheckOk: true,
+    racyCheckOk: true,
+  };
 
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': clientConfig.userAgent,
+      'Origin': 'https://www.youtube.com',
+      'Referer': 'https://www.youtube.com/',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (response.ok) {
+    const data = await response.json();
+    return data.streamingData?.hlsManifestUrl || null;
+  }
+  return null; // Return null if the request fails or no stream is found
+}
+
+async function getLiveStream(url) {
+  let videoId = null;
+
+  // 1. Extract the Video ID from the URL
   if (url.includes('watch?v=')) {
     videoId = url.split('watch?v=')[1].split('&')[0];
-  } else if (url.includes('/channel/')) {
-    // For channel IDs, we first need to fetch the channel page to find the live video ID
-    // This is a simplified approach; for handles (@abcnews), we use the live URL directly
+  } else {
+    // For channel URLs, we must first find the current live video ID
     const response = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
     const text = await response.text();
-    const match = text.match(/"videoId":"([^"]+)"(?:.*?"isLive":true)/);
-    if (match) videoId = match[1];
-  } else if (url.includes('/@')) {
-    channelHandle = url.split('/@')[1].split('/')[0];
-    // Fetch the handle's live page to find the video ID
-    const liveUrl = `https://www.youtube.com/@${channelHandle}/live`;
-    const response = await fetch(liveUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-    const text = await response.text();
-    // Look for the live video ID in the page source
+    // A more resilient regex to find the live video ID
     const match = text.match(/"videoId":"([^"]+)"(?:.*?"isLive":true)/);
     if (match) {
       videoId = match[1];
     } else {
-      // Fallback: try to find any video ID if the specific live regex fails
-       const fallbackMatch = text.match(/"videoId":"([^"]+)"/);
-       if (fallbackMatch) videoId = fallbackMatch[1];
+      // A fallback regex for cases where the first pattern fails
+      const fallbackMatch = text.match(/"videoId":"([^"]+)"/);
+      if (fallbackMatch) videoId = fallbackMatch[1];
     }
   }
 
@@ -42,47 +62,35 @@ async function getLiveStream(url) {
     throw Error(`Could not find a live video ID for the requested URL: ${url}`);
   }
 
-  // 2. Use the InnerTube API with the iOS client to get the HLS manifest
-  const apiUrl = 'https://www.youtube.com/youtubei/v1/player';
-  const payload = {
-    context: {
-      client: {
-        clientName: 'IOS',
-        clientVersion: '20.10.4',
-        deviceMake: 'Apple',
-        deviceModel: 'iPhone16,2',
-        osName: 'iPhone',
-        osVersion: '18.3.2.22D82',
-        hl: 'en',
-        gl: 'US'
-      }
+  // 2. Define the clients to try, in order of preference
+  const clients = [
+    { // iOS Client (Often the most reliable for HLS)
+      name: 'iOS',
+      userAgent: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
+      context: { clientName: 'IOS', clientVersion: '20.10.4', deviceMake: 'Apple', deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.3.2.22D82', hl: 'en', gl: 'US' }
     },
-    videoId: videoId,
-    contentCheckOk: true,
-    racyCheckOk: true
-  };
-
-  const response = await fetch(apiUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
-      'Origin': 'https://www.youtube.com',
-      'Referer': 'https://www.youtube.com/'
-    },
-    body: JSON.stringify(payload)
-  });
-
-  if (response.ok) {
-    const data = await response.json();
-    const hlsUrl = data.streamingData?.hlsManifestUrl;
-    if (hlsUrl) {
-      return hlsUrl;
+    { // Android Client (A strong secondary fallback)
+      name: 'Android',
+      userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip',
+      context: { clientName: 'ANDROID', clientVersion: '19.09.37', androidSdkVersion: 30, osName: 'Android', osVersion: '11', hl: 'en', gl: 'US' }
     }
-    throw Error(`InnerTube API did not return an hlsManifestUrl. The stream might not be live or available via this client.`);
-  } else {
-    throw Error(`InnerTube API request failed with status: ${response.status}`);
+  ];
+
+  // 3. Iterate through the clients and try to get a stream URL
+  for (const client of clients) {
+    try {
+      const streamUrl = await fetchStreamWithClient(videoId, client);
+      if (streamUrl) {
+        return streamUrl; // Return the first successful URL
+      }
+    } catch (e) {
+      // Log the error internally but continue to the next client
+      console.error(`Client ${client.name} failed: ${e.message}`);
+    }
   }
+
+  // If all clients fail
+  throw Error(`All extraction methods failed to find an HLS stream for video ID: ${videoId}`);
 }
 
 async function handleRequest(request) {
